@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $# == 0 ]] || { echo 'Usage: remote/install' >&2; exit 2; }
+root=$(cd "$(dirname "$0")/.." && pwd)
+mkdir -p "$HOME/.local/bin"
+for name in start-session start-user-sshd start-code-server; do
+    target=$HOME/.local/bin/$name
+    temp=$(mktemp "$HOME/.local/bin/.t4-entry.XXXXXXXX")
+    printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$root/remote/$name" > "$temp"
+    if [[ -f $target && ! -L $target ]] && cmp -s "$temp" "$target"; then
+        rm -f "$temp"
+        continue
+    fi
+    if [[ -e $target || -L $target ]]; then
+        backup=$(mktemp "$target.before.XXXXXXXX")
+        cp -p "$target" "$backup"
+        printf 'Backup: %s\n' "$backup"
+    fi
+    chmod 755 "$temp"
+    mv -f "$temp" "$target"
+done
+printf 'Installed start-session, start-user-sshd, start-code-server in ~/.local/bin.\n'

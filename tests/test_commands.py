@@ -63,6 +63,39 @@ fi''')
         self.assertEqual(self.run_cmd('local/t4-start', '--dry-run', '1', 'both').returncode, 0)
         self.assertFalse((self.home/'ssh.log').exists())
 
+    def test_start_auto_forward_and_failure_keeps_job_alive(self):
+        self.mock('ssh', r'''if [[ " $* " == *" -O forward "* ]]; then
+    printf '%s\n' "$@" > "$HOME/forward-args"
+    exit "${TEST_FORWARD_EXIT:-0}"
+fi
+printf '%s\n' "$$" > "$HOME/job-pid"
+echo 'T4_READY code-server r3n11 8897 123'
+exec sleep 30''')
+        for status in ('0', '255'):
+            with self.subTest(forward_status=status):
+                args_file=self.home/'forward-args'
+                if args_file.exists(): args_file.unlink()
+                self.env['TEST_FORWARD_EXIT']=status
+                proc=subprocess.Popen([str(ROOT/'local/t4-start'), '1', 'both'], env=self.env,
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.addCleanup(self.stop_process, proc)
+                for _ in range(60):
+                    if args_file.exists(): break
+                    time.sleep(.05)
+                self.assertTrue(args_file.exists())
+                self.assertIn('127.0.0.1:8890:r3n11:8897', args_file.read_text())
+                time.sleep(.3)
+                self.assertIsNone(proc.poll())
+                job_pid=int((self.home/'job-pid').read_text())
+                self.stop_process(proc)
+                with self.assertRaises(ProcessLookupError): os.kill(job_pid, 0)
+
+    def test_sshd_only_does_not_forward(self):
+        self.assertEqual(self.run_cmd('local/t4-start', '1', 'sshd').returncode, 0)
+        args=(self.home/'ssh.log').read_text().splitlines()
+        self.assertNotIn('-L', args)
+        self.assertNotIn('-O', args)
+
     def test_login_node_rejected(self):
         self.mock('hostname', 'echo login1')
         self.assertNotEqual(self.run_cmd('remote/start-code-server').returncode, 0)
@@ -207,6 +240,25 @@ while True:
         self.assertTrue(list(target.parent.glob('t4-shell.before.*')))
         result = subprocess.run([str(target)], env=self.env, capture_output=True)
         self.assertEqual(result.returncode, 0)
+
+    def test_remote_install_registers_session_and_preserves_existing_target(self):
+        target=self.home/'.local/bin/start-session'
+        target.parent.mkdir(parents=True)
+        original=self.home/'old-start-session'
+        original.write_text('preserve this')
+        target.symlink_to(original)
+        result=self.run_cmd('remote/install')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(original.read_text(), 'preserve this')
+        self.assertTrue(list(target.parent.glob('start-session.before.*')))
+        for name in ('start-session', 'start-user-sshd', 'start-code-server'):
+            self.assertTrue(os.access(target.parent/name, os.X_OK))
+        result=subprocess.run([str(target), '--help'], env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Usage: start-session', result.stdout)
+        backups=list(target.parent.glob('*.before.*'))
+        self.assertEqual(self.run_cmd('remote/install').returncode, 0)
+        self.assertEqual(list(target.parent.glob('*.before.*')), backups)
 
     def test_service_early_failure_cleans_state(self):
         self.mock('hostname', 'echo r3n11')

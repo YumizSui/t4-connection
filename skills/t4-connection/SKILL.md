@@ -33,7 +33,7 @@ description: TSUBAME4でcode-serverやユーザーsshdを起動し、Mac・Linux
 
 ## 起動と接続
 
-- `t4-start --dry-run 1 both` で確認後、指定した時間・サービスで起動する。`both` / `sshd` / `code-server` を選べる。
+- `t4-start --dry-run 1 both` で確認後、指定した時間・サービスで起動する。省略時は20時間・`both`。`both` / `code-server` では起動したPCへの転送も自動で開始する。`sshd` のみでは転送しない。別PCから接続する場合は `t4-forward` を使う。
 - 既存の `iqrsh` / `qrsh` の割当内では `~/.local/share/t4-connection/remote/` の `start-user-sshd`、`start-code-server`、`start-session both` を直接使う。
 - リモートのsshd・code-serverは指定ポートの競合時に次のポートで再試行する。実際に待ち受けを開始したポートが状態ファイルに記録される。PC側の転送ポート（既定8890）は固定で、PC側の競合は `t4-forward <local-port>` で明示的に変更する。
 - `t4-shell` と `t4-forward [local-port]` はTSUBAME側のサービス状態ファイルから接続先を取得する。ホスト名やリモートポートをPCごとに手動同期しない。

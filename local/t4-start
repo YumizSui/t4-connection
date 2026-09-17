@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 source "$(cd "$(dirname "$0")/../lib" && pwd)/common.sh"
-usage() { echo 'Usage: t4-start [--dry-run] [hours:1-24] [code-server|sshd|both]'; }
+usage() { printf '%s\n' 'Usage: t4-start [--dry-run] [hours:1-24] [code-server|sshd|both]' 'Default: 20 hours, both services; automatically forward code-server to localhost:8890 (T4_LOCAL_PORT).'; }
 [[ ${1:-} != --help && ${1:-} != -h ]] || { usage; exit; }
 dry=false
 if [[ ${1:-} == --dry-run ]]; then dry=true; shift; fi
@@ -10,4 +10,57 @@ service=${2:-both}
 [[ $service == code-server || $service == sshd || $service == both ]] || { usage >&2; exit 2; }
 remote="exec bash -lc 'cd \"\$HOME\" && exec iqrsh -l h_rt=$hours:00:00 -cwd -pty y /usr/bin/env SHELL=/bin/bash /bin/bash -l .local/share/t4-connection/remote/start-session $service'"
 args=(ssh -tt -o ControlPersist=no -o ConnectionAttempts=1 "$T4_LOGIN" "$remote")
-if "$dry"; then printf '%q ' "${args[@]}"; printf '\n'; else exec "${args[@]}"; fi
+if "$dry"; then
+    printf '%q ' "${args[@]}"; printf '\n'
+    [[ $service == sshd ]] || printf 'After code-server starts, forward localhost:%s to its remote port.\n' "$T4_LOCAL_PORT"
+    exit 0
+fi
+[[ $service != sshd ]] || exec "${args[@]}"
+port "$T4_LOCAL_PORT"
+umask 077
+# Own this master so automatic forwarding ends with this job, not another session.
+session_dir=$(mktemp -d "${TMPDIR:-/tmp}/t4-start.XXXXXXXX")
+control=$session_dir/control
+session_log=$session_dir/session.log
+: > "$session_log"
+job_pid=
+log_pid=
+cleanup() {
+    trap - EXIT INT TERM HUP
+    if [[ -n $job_pid ]]; then kill "$job_pid" 2>/dev/null || :; wait "$job_pid" 2>/dev/null || :; fi
+    if [[ -n $log_pid ]]; then kill "$log_pid" 2>/dev/null || :; wait "$log_pid" 2>/dev/null || :; fi
+    rm -f "$control" "$session_log"
+    rmdir "$session_dir"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+ssh -S "$control" -o ControlMaster=yes -o ControlPersist=no -o ConnectionAttempts=1 \
+    -o ExitOnForwardFailure=yes -tt "$T4_LOGIN" "$remote" <&0 > "$session_log" 2>&1 &
+job_pid=$!
+tail -n +1 -f "$session_log" &
+log_pid=$!
+forward_attempted=false
+while kill -0 "$job_pid" 2>/dev/null; do
+    if ! "$forward_attempted"; then
+        ready=$(tr -d '\r' < "$session_log" | grep '^T4_READY code-server ' | tail -n 1 || :)
+        if [[ $ready =~ ^T4_READY\ code-server\ (r[0-9]+n[0-9]+)\ ([0-9]{4,5})\ ([0-9]+)$ ]]; then
+            node=${BASH_REMATCH[1]}
+            remote_port=${BASH_REMATCH[2]}
+            port "$remote_port"
+            forward_attempted=true
+            if ssh -S "$control" -O forward -o ExitOnForwardFailure=yes \
+                -L "127.0.0.1:$T4_LOCAL_PORT:$node:$remote_port" "$T4_LOGIN"; then
+                printf '\nOpen http://127.0.0.1:%s (forwarding to %s:%s).\n' "$T4_LOCAL_PORT" "$node" "$remote_port"
+            else
+                printf '\nAutomatic forwarding failed; the remote job is still running.\nUse t4-forward <another-local-port> in another terminal.\n' >&2
+            fi
+        fi
+    fi
+    sleep 0.2
+done
+result=0
+wait "$job_pid" || result=$?
+job_pid=
+exit "$result"

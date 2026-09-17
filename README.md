@@ -43,7 +43,7 @@ Host tsubame4
 ./local/deploy
 ```
 
-配置先はTSUBAMEの `~/.local/share/t4-connection/` です。`lib/`、`remote/`、設定例だけを転送し、個人設定・秘密鍵・Git履歴は転送しません。再実行でスクリプトを更新できます。実行中のサーバーは自動再起動しません。
+配置先はTSUBAMEの `~/.local/share/t4-connection/` です。`lib/`、`remote/`、設定例だけを転送し、個人設定・秘密鍵・Git履歴は転送しません。`~/.local/bin/` に `start-session`・`start-user-sshd`・`start-code-server` の入口も作成します。TSUBAME側でも `~/.local/bin` をPATHに含めてください。再実行でスクリプトと入口を更新できます。実行中のサーバーは自動再起動しません。
 
 TSUBAMEで `~/.config/t4-connection/config` を作ります。
 
@@ -80,9 +80,10 @@ sshdは公開鍵認証のみ、code-serverはパスワード認証で起動し�
 
 `both` はsshdとcode-server、`sshd` / `code-server` は片方だけを起動します。省略時は20時間・両方です。
 実行時間は1–24時間です。時間制限はスケジューラの `h_rt` で設定し、割当待ち時間は含みません。
+`both` / `code-server` では起動したPCへのSSH転送も自動で開始し、ブラウザ用URLを表示します。PC側のポートは既定8890（`T4_LOCAL_PORT`で変更可能）です。`sshd` のみでは転送しません。
 起動用ターミナルは開いたままにし、Ctrl-Cで終了します。片方が終了した場合はもう片方も停止します。
 
-接続用PCで:
+起動したPCでは表示されたURLをそのまま使えます。別PCから接続する場合は:
 
 ```bash
 ./local/t4-shell
@@ -93,7 +94,7 @@ sshdは公開鍵認証のみ、code-serverはパスワード認証で起動し�
 
 `t4-forward` が表示する `http://127.0.0.1:ポート` をブラウザで開き、code-serverのパスワードでログインします。
 リモート側が例えば8891に変わっても、PC側は `localhost:8890 → 計算ノード:8891` のように8890のまま転送します。PC側の競合では自動変更せず、上のようにポートを明示します。
-転送はローカルのloopbackだけにバインドします。転送終了はCtrl-Cです。
+転送はローカルのloopbackだけにバインドします。手動転送の終了はCtrl-Cです。自動転送は起動用ジョブの接続終了とともに閉じます。自動転送がポート競合などで失敗した場合はジョブを維持するため、別ターミナルで `t4-forward 8892` などを実行できます。
 sshdの初回接続時には、起動ログに表示されたホスト鍵fingerprintと照合してください。
 
 接続先はTSUBAMEホームの `~/.local/state/t4-connection/{sshd,code-server}` から取得します。

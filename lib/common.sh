@@ -106,6 +106,7 @@ serve() {
     printf '%s %s %s\n' "$node" "$service_port" "$(id -un)" > "$lock/endpoint"
     mv "$lock/endpoint" "$state_dir/$service"
     printf '%s running on %s:%s (job %s). Stop with Ctrl-C.\n' "$service" "$node" "$service_port" "$JOB_ID" >&2
+    printf 'T4_READY %s %s %s %s\n' "$service" "$node" "$service_port" "$JOB_ID"
     result=0
     wait "$child" || result=$?
     cleanup

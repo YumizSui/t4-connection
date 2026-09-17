@@ -3,6 +3,7 @@ set -eo pipefail
 [[ $# -le 1 ]] || { echo "Usage: start-session [code-server|sshd|both]" >&2; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
 case ${1:-both} in
+    --help|-h) echo "Usage: start-session [code-server|sshd|both]"; exit 0 ;;
     code-server) exec "$here/start-code-server" ;;
     sshd) exec "$here/start-user-sshd" ;;
     both) ;;
