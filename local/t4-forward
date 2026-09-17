@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+source "$(cd "$(dirname "$0")/../lib" && pwd)/common.sh"
+[[ $# -le 1 ]] || fail 'Usage: t4-forward [local-port]'
+local_port=${1:-$T4_LOCAL_PORT}
+port "$local_port"
+read_state code-server
+printf 'Open http://127.0.0.1:%s; stop forwarding with Ctrl-C.\n' "$local_port" >&2
+exec ssh "${isolated[@]}" -N -T -L "127.0.0.1:$local_port:$node:$remote_port" "$T4_LOGIN"

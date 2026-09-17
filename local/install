@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $# == 0 ]] || { echo 'Usage: local/install' >&2; exit 2; }
+root=$(cd "$(dirname "$0")/.." && pwd)
+destination=$HOME/.local/share/t4-connection
+mkdir -p "$destination" "$HOME/.local/bin"
+if [[ $root != "$destination" ]]; then
+    tar_options=()
+    if [[ $(uname -s) == Darwin ]]; then tar_options+=(--no-xattrs); fi
+    COPYFILE_DISABLE=1 tar "${tar_options[@]}" -C "$root" -cf - local remote lib config.example |
+        tar -xf - -C "$destination"
+fi
+for name in t4-start t4-shell t4-forward; do
+    target=$HOME/.local/bin/$name
+    if [[ -e $target || -L $target ]]; then
+        backup=$(mktemp "$target.before.XXXXXXXX")
+        cp -p "$target" "$backup"
+        printf 'Backup: %s\n' "$backup"
+    fi
+    # Remove a symlink itself rather than overwrite its target.
+    if [[ -L $target ]]; then unlink "$target"; fi
+    printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$destination/local/$name" > "$target"
+    chmod 755 "$target"
+done
+printf 'Installed in %s\nAdd ~/.local/bin to PATH and remove old shell functions with these names.\n' "$destination"

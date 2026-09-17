@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -eo pipefail
+[[ $# -le 1 ]] || { echo "Usage: start-session [code-server|sshd|both]" >&2; exit 2; }
+here=$(cd "$(dirname "$0")" && pwd)
+case ${1:-both} in
+    code-server) exec "$here/start-code-server" ;;
+    sshd) exec "$here/start-user-sshd" ;;
+    both) ;;
+    *) echo 'Usage: start-session [code-server|sshd|both]' >&2; exit 2 ;;
+esac
+pids=()
+cleanup() {
+    trap - EXIT INT TERM HUP
+    for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || :; done
+    for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || :; done
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+"$here/start-user-sshd" &
+pids+=("$!")
+"$here/start-code-server" &
+pids+=("$!")
+# Bash 3.2-compatible alternative to wait -n.
+while :; do
+    for pid in "${pids[@]}"; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            result=0
+            wait "$pid" || result=$?
+            exit "$result"
+        fi
+    done
+    sleep 1
+done

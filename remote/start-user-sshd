@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+source "$(cd "$(dirname "$0")/../lib" && pwd)/common.sh"
+[[ $# -le 1 ]] || fail 'Usage: start-user-sshd [port]'
+sshd_port=${1:-$T4_SSH_PORT}
+port "$sshd_port"
+compute_node
+[[ -r $HOME/.ssh/authorized_keys ]] || fail 'Register your client public key in ~/.ssh/authorized_keys first.'
+sshd_dir=${T4_SSHD_DIR:-$HOME/.ssh/t4-connection}
+mkdir -p "$sshd_dir"
+chmod 700 "$sshd_dir"
+# Serialize host-key creation independently of service startup.
+if [[ ! -f $sshd_dir/host_key ]]; then
+    mkdir "$sshd_dir/key.lock" 2>/dev/null || fail 'Host-key generation is already in progress.'
+    ssh-keygen -q -t ed25519 -N '' -f "$sshd_dir/host_key" || { rmdir "$sshd_dir/key.lock"; exit 1; }
+    rmdir "$sshd_dir/key.lock"
+fi
+sshd_config=$sshd_dir/config-$node-$$
+cat > "$sshd_config" <<EOF
+ListenAddress 0.0.0.0
+HostKey "$sshd_dir/host_key"
+PidFile "$sshd_dir/sshd-$node-$$.pid"
+AuthorizedKeysFile "$HOME/.ssh/authorized_keys"
+AllowUsers $(id -un)
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+UsePAM no
+Subsystem sftp internal-sftp
+EOF
+/usr/sbin/sshd -t -p "$sshd_port" -f "$sshd_config"
+ssh-keygen -lf "$sshd_dir/host_key.pub"
+serve sshd "$sshd_port" /usr/sbin/sshd -D -e -f "$sshd_config"

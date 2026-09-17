@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+source "$(cd "$(dirname "$0")/../lib" && pwd)/common.sh"
+[[ $# == 0 ]] || fail 'Usage: t4-shell'
+read_state sshd
+exec ssh "${isolated[@]}" -J "$T4_LOGIN" -p "$remote_port" "$remote_user@$node"

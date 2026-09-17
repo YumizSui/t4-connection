@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+source "$(cd "$(dirname "$0")/../lib" && pwd)/common.sh"
+[[ $# == 0 ]] || fail 'Usage: start-code-server'
+compute_node
+port "$T4_CODE_PORT"
+binary=${T4_CODE_SERVER:-code-server}
+command -v "$binary" >/dev/null || fail 'Set T4_CODE_SERVER to an installed code-server binary.'
+# code-server creates its password config on first start; never disable auth.
+serve code-server "$T4_CODE_PORT" "$binary" --auth password

@@ -1,0 +1,157 @@
+# t4-connection
+
+TSUBAME4の計算ノードで code-server とユーザー権限の sshd を起動し、Mac / Linux / WSL から接続する Bash スクリプト集。
+起動用PCと接続用PCは別でも使えます。各PCで同じTSUBAMEアカウントへのSSH接続を設定してください。
+
+## 構成
+
+- `local/`: PC側。ジョブ起動、SSH接続、ブラウザ用転送、リモート配置。
+- `remote/`: TSUBAME側。既に確保した計算ノードでサーバーを起動。
+- `lib/`: 共通設定と状態ファイル管理。
+- `config.example`: 公開可能な設定例。個人設定はリポジトリ外へ保存。
+- `skills/t4-connection/`: coding agent向けの運用手順。
+- `docs/scrapbox.txt`: Scrapboxに貼り付ける説明。
+
+通常実行にはBash 3.2以降、OpenSSH、基本的なUnixコマンドを使います。配置にはtar、テストにはPython 3が必要です。
+TSUBAMEにはcode-serverを別途導入してください。sshdは `/usr/sbin/sshd` を使います。
+
+## 初回設定
+
+PCで:
+
+```bash
+git clone https://github.com/YumizSui/t4-connection.git
+cd t4-connection
+mkdir -p ~/.config/t4-connection
+cp config.example ~/.config/t4-connection/config
+chmod 600 ~/.config/t4-connection/config
+```
+
+`~/.ssh/config` に接続先を設定します。ユーザー名は自分のものに変更します。
+
+```sshconfig
+Host tsubame4
+    HostName login.t4.gsic.titech.ac.jp
+    User YOUR_USERNAME
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+`T4_LOGIN` で別のSSH aliasも指定できます。configはBashとして読み込むので、自分で管理するファイルを指定します。
+`T4_CONFIG` で設定ファイルの場所を変更できます。
+
+```bash
+./local/deploy
+```
+
+配置先はTSUBAMEの `~/.local/share/t4-connection/` です。`lib/`、`remote/`、設定例だけを転送し、個人設定・秘密鍵・Git履歴は転送しません。再実行でスクリプトを更新できます。実行中のサーバーは自動再起動しません。
+
+TSUBAMEで `~/.config/t4-connection/config` を作ります。
+
+```bash
+mkdir -p ~/.config/t4-connection
+cp ~/.local/share/t4-connection/config.example ~/.config/t4-connection/config
+chmod 600 ~/.config/t4-connection/config
+```
+
+`T4_CODE_SERVER` にcode-server実行ファイルの絶対パスを指定します。PATHにある場合は不要です。
+ポートは `T4_CODE_PORT` と `T4_SSH_PORT` を利用可能な1024–65535の値に設定します。同じノードで競合した場合は次の番号を順に試します。既定では指定番号から最大20ポート、65535までを試し、競合以外の起動エラーでは停止します。`T4_PORT_ATTEMPTS`（1–100）で試行数を変更できます。
+ポート番号は認証情報ではありません。公開サンプルには既定値だけを含めます。
+
+sshd用に、接続する各PCの公開鍵をTSUBAMEの `~/.ssh/authorized_keys` に登録してください。
+sshdは公開鍵認証のみ、code-serverはパスワード認証で起動します。code-serverの初回起動時に生成される `~/.config/code-server/config.yaml` でパスワードを確認し、ファイル権限を600にしてください。
+
+## PCのPATHに導入
+
+```bash
+./local/install
+```
+
+スクリプトを `~/.local/share/t4-connection/` にコピーし、3つのコマンドを `~/.local/bin/` に作ります。更新時も再実行します。既存コマンドは `*.before.*` にバックアップします。
+`~/.zshrc`（Mac）または `~/.bashrc`（WSL）に `export PATH="$HOME/.local/bin:$PATH"` を追加してください。同名の古いaliasや関数がある場合はバックアップ後に削除し、新しいシェルを開きます。以後 `t4-start`、`t4-shell`、`t4-forward` を直接呼べます。
+
+## 起動と接続
+
+起動用PCで、必要な時間だけ確保します（例は1時間）。
+
+```bash
+./local/t4-start --dry-run 1 both
+./local/t4-start 1 both
+```
+
+`both` はsshdとcode-server、`sshd` / `code-server` は片方だけを起動します。省略時は20時間・両方です。
+実行時間は1–24時間です。時間制限はスケジューラの `h_rt` で設定し、割当待ち時間は含みません。
+起動用ターミナルは開いたままにし、Ctrl-Cで終了します。片方が終了した場合はもう片方も停止します。
+
+接続用PCで:
+
+```bash
+./local/t4-shell
+./local/t4-forward
+# ローカルの8890番が使用中なら:
+./local/t4-forward 8892
+```
+
+`t4-forward` が表示する `http://127.0.0.1:ポート` をブラウザで開き、code-serverのパスワードでログインします。
+リモート側が例えば8891に変わっても、PC側は `localhost:8890 → 計算ノード:8891` のように8890のまま転送します。PC側の競合では自動変更せず、上のようにポートを明示します。
+転送はローカルのloopbackだけにバインドします。転送終了はCtrl-Cです。
+sshdの初回接続時には、起動ログに表示されたホスト鍵fingerprintと照合してください。
+
+接続先はTSUBAMEホームの `~/.local/state/t4-connection/{sshd,code-server}` から取得します。
+ホスト名・ポート・ユーザー名を保存し、パスワードは保存しません。別PCでポートを同期する必要はありません。
+サーバー自身の待受開始ログを確認してから状態ファイルを公開します。起動確認の待ち時間は既定30秒、`T4_STARTUP_TIMEOUT`（1–300秒）で変更できます。起動ログは同じディレクトリの `<service>.log` に保存し、起動試行ごとに更新します。
+サービスごとに同時起動は1つです。状態ファイルは接続先の案内であり、接続成功による稼働確認とは別です。
+
+## 既存の割当を確認する
+
+AIによる再利用判断は [skill](skills/t4-connection/SKILL.md#起動済みかを判断するai向け) を参照してください。`iqstat` と `qstat` の両方を確認し、状態ファイルのジョブID・ノードと照合します。`qrsh -g` で確保した通常キューの割当も対象です。利用可能なサービスがあれば再利用し、不要な二重確保を避けます。
+
+## 手動で確保したノードで起動
+
+```bash
+# TSUBAMEのログインノードで:
+iqrsh -l h_rt=1:00:00
+# 割当後の計算ノードで、必要なものを1つ選ぶ:
+~/.local/share/t4-connection/remote/start-user-sshd
+~/.local/share/t4-connection/remote/start-code-server
+~/.local/share/t4-connection/remote/start-session both
+```
+
+通常キューで `qrsh -g <group> -l <resource>=1 -l h_rt=<time>` により確保した割当内でも、同じremoteスクリプトを使えます。`t4-start` 自体はiqrsh用です。
+
+各サーバーは前面で動きます。個別に2つ起動する場合は、同じ割当内の別ターミナルを使ってください。
+`JOB_ID` と計算ノード名を確認し、ログインノードでの誤起動を防ぎます。
+`t4-shell` は通常のSSHログイン環境です。元のiqrshの環境変数やmodule設定をそのまま複製するものではありません。
+
+## 既存環境からの移行
+
+1. 既存のスクリプト、symlinkの実体、稼働中ジョブ、ポート、ホスト鍵の場所を確認します。
+2. `local/deploy` で専用ディレクトリに配置します。共有領域のcode-server本体や起動スクリプトは変更しません。
+3. TSUBAME側のconfigで既存のポートを設定します。既存のユーザーsshd鍵を再利用する場合は `T4_SSHD_DIR="$HOME/.ssh/user-sshd"` のように指定します。
+4. 既存サーバーと競合しない状態で新しい起動・接続を検証します。
+5. `~/code_server` などの旧入口はバックアップし、新しいremoteスクリプトへのwrapperに切り替えます。
+
+コマンドの入口は `local/` と `remote/` です。個人設定や秘密情報はリポジトリ外で管理してください。
+
+## 停止と復旧
+
+通常終了では子プロセスと状態ファイル・ロックを片付けます。
+強制終了やノード障害ではロックが残ることがあります。`~/.local/state/t4-connection/<service>.lock/owner` にノード・ジョブID・PIDが記録されています。
+`iqstat` / `qstat` と対象ノードのプロセスを確認し、サービスが停止済みの場合だけ、そのサービスの状態ファイルとlockディレクトリを削除して再起動します。
+
+SSH転送は共有ControlMasterから独立しており、転送失敗やCtrl-Cで既存のSSH masterを終了しません。
+利用者の他のジョブを止める `qdel` や、master全体に対する `ssh -O exit` は実行しません。
+
+## 開発
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+coding agent向けskillは `skills/t4-connection/` にあります。導入・更新・移行の手順は [installation.md](skills/t4-connection/references/installation.md) を参照してください。
+
+## 参照
+
+- [TSUBAME4 ジョブとインタラクティブ利用](https://www.t4.cii.isct.ac.jp/docs/handbook.ja/jobs/)
+- [code-server 設定](https://coder.com/docs/code-server/FAQ)
+
+インタラクティブ専用キューは対話的な用途向けです。連続的に計算資源を占有する処理は適切な通常キューのジョブへ分けてください。

@@ -1,0 +1,55 @@
+TSUBAME4にブラウザ・SSHで接続する t4-connection
+#TSUBAME4 #開発環境
+
+[*** 何ができるか]
+ 計算ノードでcode-serverとユーザー権限のsshdを起動する。
+ 起動したPCとは別のPCからも、同じTSUBAMEアカウントで接続できる。
+ ホスト名とポートはTSUBAME側の状態ファイルから取得する。
+ TSUBAME側のポートが競合したら次の番号を試す。PC側は基本8890のまま使える。
+ [GitHub https://github.com/YumizSui/t4-connection]
+
+[*** 初回設定]
+ PCにrepoをcloneし、config.exampleを ~/.config/t4-connection/config にコピーする。
+ ~/.ssh/config に tsubame4 を設定し、SSHログインできることを確認する。
+ local/deployでTSUBAMEにスクリプトを配置する。
+ TSUBAME側にもconfigを作り、code-serverの実行ファイルとポートを指定する。
+ 各PCの公開鍵をTSUBAMEの ~/.ssh/authorized_keys に登録する。
+ 詳細は [README https://github.com/YumizSui/t4-connection#readme] を参照。
+
+[*** 起動済みの割当がある場合]
+ AIはiqstatとqstatの両方を確認し、サービスの状態ファイルに対応するジョブとノードを照合する。
+ qrsh -gで確保した通常キューの割当も再利用の候補。サービスが利用可能なら新しく確保しない。
+ サービスだけ未起動なら既存割当のターミナルで起動する。再利用できる割当がない場合は、用途に応じてiqrshかqrsh -gを選ぶ。
+
+[*** 起動用PC]
+code:bash
+ ./local/t4-start 1 both
+ 1時間のiqrsh内で両方を起動する。sshd、code-serverの片方だけも指定できる。
+ このターミナルを開いたままにする。終了はCtrl-C。
+
+[*** 接続用PC]
+code:bash
+ ./local/t4-shell
+ SSHでシェルに入る。初回のホスト鍵は起動ログのfingerprintと照合する。
+code:bash
+ ./local/t4-forward
+ 表示されるlocalhostのURLをブラウザで開く。
+ code-serverのパスワードはTSUBAMEの ~/.config/code-server/config.yaml で確認する。
+ PC側のポートが使用中なら ./local/t4-forward 8892 のように変更する。
+
+[*** 手動でiqrshに入る場合]
+ 計算ノードで必要なスクリプトを直接実行できる。
+code:bash
+ ~/.local/share/t4-connection/remote/start-session both
+ sshdだけならremote/start-user-sshd、code-serverだけならremote/start-code-server。
+
+[*** 既存環境の移行]
+ 既存の起動ファイルとsymlinkを確認し、入口をバックアップする。
+ 共有領域のアプリ本体はそのまま使い、専用ディレクトリに新しいスクリプトを置く。
+ 既存sshdのホスト鍵はT4_SSHD_DIRで引き継げる。
+ 転送用SSHは既存の共有接続と分離される。
+
+[*** 停止と復旧]
+ 起動用ターミナルでCtrl-Cするとサーバーを終了する。
+ 強制終了でロックが残った場合は、ownerのジョブIDとPIDが停止済みか確認してから片付ける。
+ 他のジョブや共有SSH masterを停止しない。

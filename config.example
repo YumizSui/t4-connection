@@ -1,0 +1,12 @@
+# Copy to ~/.config/t4-connection/config on each PC and TSUBAME.
+# This is a Bash file; only source your own configuration.
+T4_LOGIN=tsubame4
+# Set only on TSUBAME if code-server is not on PATH:
+# T4_CODE_SERVER=/absolute/path/to/code-server
+# Preferred remote ports; try successive ports if occupied.
+T4_CODE_PORT=8890
+T4_SSH_PORT=12345
+# PC-side port stays fixed even when the remote port changes.
+T4_LOCAL_PORT=8890
+# T4_PORT_ATTEMPTS=20
+# T4_STARTUP_TIMEOUT=30

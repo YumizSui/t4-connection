@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+source "$(cd "$(dirname "$0")/../lib" && pwd)/common.sh"
+[[ $# == 0 ]] || fail 'Usage: deploy'
+root=$(cd "$(dirname "$0")/.." && pwd)
+# Explicit allowlist: never send env, local config, keys, or repository history.
+tar_options=()
+if [[ $(uname -s) == Darwin ]]; then tar_options+=(--no-xattrs); fi
+COPYFILE_DISABLE=1 tar "${tar_options[@]}" -C "$root" -cf - lib remote config.example | ssh "$T4_LOGIN" 'umask 077; mkdir -p "$HOME/.local/share/t4-connection" && tar -xf - -C "$HOME/.local/share/t4-connection"'
