@@ -1,11 +1,23 @@
 #!/usr/bin/env bash
 source "$(cd "$(dirname "$0")/../lib" && pwd)/common.sh"
-usage() { printf '%s\n' 'Usage: t4-start [--dry-run] [hours:1-24] [code-server|sshd|both]' 'Defaults: T4_START_HOURS (20), T4_START_SERVICE (sshd). Explicit arguments override config; code-server forwarding uses T4_LOCAL_PORT.'; }
-[[ ${1:-} != --help && ${1:-} != -h ]] || { usage; exit; }
+usage() { printf '%s\n' 'Usage: t4-start [--dry-run] [--open-browser|--no-open-browser] [hours:1-24] [code-server|sshd|both]' 'Defaults: T4_START_HOURS (20), T4_START_SERVICE (both), T4_OPEN_BROWSER (true). Explicit arguments override config; code-server forwarding uses T4_LOCAL_PORT.'; }
 dry=false
-if [[ ${1:-} == --dry-run ]]; then dry=true; shift; fi
+open_browser=${T4_OPEN_BROWSER:-true}
+positionals=()
+for arg in "$@"; do
+    case $arg in
+        --help|-h) usage; exit 0 ;;
+        --dry-run) dry=true ;;
+        --open-browser) open_browser=true ;;
+        --no-open-browser) open_browser=false ;;
+        --*) usage >&2; exit 2 ;;
+        *) positionals+=("$arg") ;;
+    esac
+done
+set -- "${positionals[@]}"
+[[ $open_browser == true || $open_browser == false ]] || fail 'T4_OPEN_BROWSER must be true or false.'
 hours=${1:-${T4_START_HOURS:-20}}
-service=${2:-${T4_START_SERVICE:-sshd}}
+service=${2:-${T4_START_SERVICE:-both}}
 [[ $# -le 2 && $hours =~ ^([1-9]|1[0-9]|2[0-4])$ ]] || { usage >&2; exit 2; }
 [[ $service == code-server || $service == sshd || $service == both ]] || { usage >&2; exit 2; }
 remote="exec bash -lc 'cd \"\$HOME\" && exec iqrsh -l h_rt=$hours:00:00 -cwd -pty y /usr/bin/env SHELL=/bin/bash /bin/bash -l .local/share/t4-connection/remote/start-session $service'"
@@ -13,10 +25,36 @@ args=(ssh -tt -o ControlPersist=no -o ConnectionAttempts=1 "$T4_LOGIN" "$remote"
 if "$dry"; then
     printf '%q ' "${args[@]}"; printf '\n'
     [[ $service == sshd ]] || printf 'After code-server starts, forward localhost:%s to its remote port.\n' "$T4_LOCAL_PORT"
+    if [[ $service != sshd && $open_browser == true ]]; then
+        printf 'After HTTP is ready, open http://localhost:%s in the browser.\n' "$T4_LOCAL_PORT"
+    fi
     [[ $service == code-server ]] || printf 'After sshd starts, register dynamic Host t4-compute in ~/.ssh/config.\n'
     exit 0
 fi
 [[ $service == sshd ]] || port "$T4_LOCAL_PORT"
+launch_browser() {
+    local url=http://localhost:$T4_LOCAL_PORT status attempt
+    # Forward setup alone does not prove HTTP is reachable through the tunnel.
+    for (( attempt=0; attempt<10; attempt++ )); do
+        kill -0 "$job_pid" 2>/dev/null || return 1
+        status=$(curl --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:$T4_LOCAL_PORT/") || status=000
+        case $status in
+            2??|3??|401|403)
+                if [[ $(uname -s) == Darwin ]]; then
+                    open "$url"
+                elif command -v wslview >/dev/null 2>&1; then
+                    wslview "$url"
+                elif command -v cmd.exe >/dev/null 2>&1; then
+                    cmd.exe /c start "" "$url"
+                else
+                    xdg-open "$url"
+                fi
+                return $? ;;
+        esac
+        sleep 0.2
+    done
+    return 1
+}
 umask 077
 # Own this master so automatic forwarding ends with this job, not another session.
 session_dir=$(mktemp -d "${TMPDIR:-/tmp}/t4-start.XXXXXXXX")
@@ -65,6 +103,11 @@ while kill -0 "$job_pid" 2>/dev/null; do
             if ssh -S "$control" -O forward -o ExitOnForwardFailure=yes \
                 -L "127.0.0.1:$T4_LOCAL_PORT:$node:$remote_port" "$T4_LOGIN"; then
                 printf '\nOpen http://127.0.0.1:%s (forwarding to %s:%s).\n' "$T4_LOCAL_PORT" "$node" "$remote_port"
+                if "$open_browser"; then
+                    if ! launch_browser; then
+                        printf 'Browser auto-open failed or HTTP is not ready; the job and forwarding are retained. Open http://localhost:%s manually.\n' "$T4_LOCAL_PORT" >&2
+                    fi
+                fi
             else
                 printf '\nAutomatic forwarding failed; the remote job is still running.\nUse t4-forward <another-local-port> in another terminal.\n' >&2
             fi

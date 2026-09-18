@@ -20,6 +20,9 @@ class Commands(unittest.TestCase):
         self.bin.mkdir()
         self.env = dict(os.environ, HOME=str(self.home), T4_CONFIG=str(self.home/'absent'),
                         PATH=f'{self.bin}:/usr/bin:/bin', LOG=str(self.home/'ssh.log'))
+        self.mock('curl', 'printf 302')
+        self.mock('open', 'printf "%s\\n" "$*" >> "$HOME/browser.log"')
+        self.mock('xdg-open', 'printf "%s\\n" "$*" >> "$HOME/browser.log"')
         self.mock('ssh', '''if [[ $1 == -G ]]; then echo 'user testuser'; exit; fi
 if [[ $* == *'cat .local/state'* ]]; then
 printf '%s\\n' "${TEST_STATE:-r3n11 12345 testuser}"
@@ -70,7 +73,7 @@ fi''')
         result = self.run_cmd('local/t4-start', '--dry-run')
         self.assertEqual(result.returncode, 0)
         self.assertIn('h_rt=20:00:00', result.stdout)
-        self.assertIn('start-session\\ sshd', result.stdout)
+        self.assertIn('start-session\\ both', result.stdout)
         config = self.home/'start-config'
         config.write_text('T4_START_HOURS=3\nT4_START_SERVICE=both\n')
         self.env['T4_CONFIG'] = str(config)
@@ -117,6 +120,59 @@ exec sleep 30''')
         args=(self.home/'ssh.log').read_text().splitlines()
         self.assertNotIn('-L', args)
         self.assertNotIn('-O', args)
+        self.assertFalse((self.home/'browser.log').exists())
+
+    def test_browser_opens_only_after_forward_and_http_with_opt_out(self):
+        self.mock('ssh', r'''if [[ " $* " == *" -O forward "* ]]; then
+    touch "$HOME/forward-ready"
+    exit "${TEST_FORWARD_EXIT:-0}"
+fi
+echo 'T4_READY code-server r3n11 8897 123'
+exec sleep 30''')
+        self.mock('curl', r'''test -f "$HOME/forward-ready" || exit 9
+echo probe >> "$HOME/http-probes"
+printf '%s' "${TEST_HTTP_STATUS:-302}"''')
+        for name, options, config, forward, http, opened in [
+                ('default', [], 'true', '0', '302', True),
+                ('disabled', ['--no-open-browser'], 'true', '0', '302', False),
+                ('config_disabled', [], 'false', '0', '302', False),
+                ('explicit_enable', ['--open-browser'], 'false', '0', '401', True),
+                ('forward_failed', [], 'true', '255', '302', False),
+                ('http_failed', [], 'true', '0', '000', False)]:
+            with self.subTest(name=name):
+                for file in ('browser.log', 'http-probes', 'forward-ready'):
+                    (self.home/file).unlink(missing_ok=True)
+                self.env.update(T4_OPEN_BROWSER=config, TEST_FORWARD_EXIT=forward,
+                                TEST_HTTP_STATUS=http, T4_LOCAL_PORT='9001')
+                with tempfile.TemporaryFile(mode='w+') as output:
+                    proc = subprocess.Popen([str(ROOT/'local/t4-start'), '1', 'code-server', *options],
+                                            env=self.env, stdout=output, stderr=output)
+                    self.addCleanup(self.stop_process, proc)
+                    for _ in range(100):
+                        output.seek(0)
+                        text = output.read()
+                        if ((self.home/'browser.log').exists() or
+                                'auto-open failed' in text or 'Automatic forwarding failed' in text or
+                                (config == 'false' and not options or '--no-open-browser' in options)
+                                and (self.home/'forward-ready').exists()):
+                            break
+                        time.sleep(.05)
+                    self.assertIsNone(proc.poll())
+                    self.stop_process(proc)
+                self.assertEqual((self.home/'browser.log').exists(), opened)
+                if opened:
+                    self.assertEqual((self.home/'browser.log').read_text().splitlines(),
+                                     ['http://localhost:9001'])
+                    self.assertTrue((self.home/'http-probes').exists())
+
+    def test_browser_dry_run_and_options(self):
+        result = self.run_cmd('local/t4-start', '--dry-run', '1', 'both')
+        self.assertIn('open http://localhost:8890', result.stdout)
+        result = self.run_cmd('local/t4-start', '1', 'both', '--no-open-browser', '--dry-run')
+        self.assertEqual(result.returncode, 0)
+        self.assertNotIn('After HTTP', result.stdout)
+        self.assertFalse((self.home/'browser.log').exists())
+        self.assertNotEqual(self.run_cmd('local/t4-start', '--unknown').returncode, 0)
 
     def test_ssh_config_updates_preserves_settings_and_is_idempotent(self):
         config = self.home/'.ssh/config'
@@ -247,6 +303,93 @@ exec sleep 30''')
                 self.fail('Service exited before publishing its endpoint')
             time.sleep(.05)
         self.fail('Service did not publish its endpoint')
+
+    def test_stale_lock_recovery_requires_verified_scheduler_lists(self):
+        table = 'job-ID prior name user state\n-----------------------------\n'
+        current = table + '123 0.5 session testuser r\n'
+        old = table + '456 0.5 old testuser qw\n'
+        scenarios = [
+            ('expired', current, '', '0', '0', True),
+            ('normal_queue_current', '', current, '0', '0', True),
+            ('interactive_alive', current + '456 0.5 old testuser r\n', '', '0', '0', False),
+            ('normal_queue_waiting', current, old, '0', '0', False),
+            ('iqstat_failure', current, '', '1', '0', False),
+            ('qstat_failure', current, '', '0', '1', False),
+            ('error_with_zero_exit', current, 'unable to contact qmaster', '0', '0', False),
+            ('both_empty', '', '', '0', '0', False),
+            ('malformed_table', current, table + 'garbage', '0', '0', False),
+        ]
+        self.mock('iqstat', 'printf "%s" "$IQ_LIST"; exit "$IQ_EXIT"')
+        self.mock('qstat', 'printf "%s" "$Q_LIST"; exit "$Q_EXIT"')
+        self.mock('sleep', ':')
+        self.env['JOB_ID'] = '123'
+        for name, iq, q, iq_exit, q_exit, recover in scenarios:
+            with self.subTest(name=name):
+                state_dir = self.home/name
+                lock = state_dir/'sshd.lock'
+                lock.mkdir(parents=True)
+                (lock/'owner').write_text('r4n11 456 999\n')
+                endpoint = state_dir/'sshd'
+                endpoint.write_text('r4n11 22222 testuser\n')
+                self.env.update(IQ_LIST=iq, Q_LIST=q, IQ_EXIT=iq_exit, Q_EXIT=q_exit)
+                result = subprocess.run(['bash', '-c',
+                    'source "$1/lib/common.sh"; state_dir=$2; service=sshd; '
+                    'lock=$state_dir/sshd.lock; acquire_service_lock',
+                    'test', str(ROOT), str(state_dir)], env=self.env, text=True, capture_output=True)
+                self.assertEqual(result.returncode == 0, recover, result.stderr)
+                archives = list(state_dir.glob('sshd.stale.*'))
+                if recover:
+                    self.assertEqual(archives, [])
+                    self.assertFalse(endpoint.exists())
+                    self.assertEqual(list(lock.iterdir()), [])
+                else:
+                    self.assertEqual(archives, [])
+                    self.assertEqual((lock/'owner').read_text(), 'r4n11 456 999\n')
+                    self.assertTrue(endpoint.exists())
+                self.assertFalse((lock/'recovery').exists())
+
+    def test_invalid_or_incomplete_lock_owner_is_preserved(self):
+        self.env['JOB_ID'] = '123'
+        lock = self.home/'sshd.lock'
+        lock.mkdir()
+        for owner in [None, '', 'r4n11 bad 999\n', 'r4n11 456 999\nextra',
+                      'r4n11 123 999\n', '$(touch injected) 456 999\n']:
+            with self.subTest(owner=owner):
+                if owner is not None:
+                    (lock/'owner').write_text(owner)
+                result = subprocess.run(['bash', '-c',
+                    'source "$1/lib/common.sh"; state_dir=$HOME; service=sshd; '
+                    'lock=$HOME/sshd.lock; acquire_service_lock', 'test', str(ROOT)],
+                    env=self.env, text=True, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertTrue(lock.exists())
+                self.assertFalse((lock/'recovery').exists())
+
+    def test_concurrent_recovery_has_one_winner(self):
+        self.env['JOB_ID'] = '123'
+        lock = self.home/'sshd.lock'
+        lock.mkdir()
+        (lock/'owner').write_text('r4n11 456 999\n')
+        self.mock('iqstat', 'touch "$HOME/query-started"; sleep 0.3; '
+                  'printf "job-ID prior name user state\\n123 0.5 session user r\\n"')
+        self.mock('qstat', ':')
+        args = ['bash', '-c', 'source "$1/lib/common.sh"; state_dir=$HOME; '
+                'service=sshd; lock=$HOME/sshd.lock; acquire_service_lock', 'test', str(ROOT)]
+        first = subprocess.Popen(args, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 text=True)
+        self.addCleanup(self.stop_process, first)
+        for _ in range(100):
+            if (self.home/'query-started').exists():
+                break
+            time.sleep(.01)
+        self.assertTrue((self.home/'query-started').exists())
+        second = subprocess.run(args, env=self.env, text=True, capture_output=True)
+        self.assertNotEqual(second.returncode, 0)
+        self.assertIn('recovery busy', second.stderr)
+        _, error = first.communicate(timeout=5)
+        self.assertEqual(first.returncode, 0, error)
+        self.assertEqual(list(self.home.glob('sshd.stale.*')), [])
+        self.assertEqual(list(lock.iterdir()), [])
 
     def stop_process(self, proc):
         if proc.poll() is None:

@@ -79,26 +79,26 @@ sshdは公開鍵認証のみ、code-serverはパスワード認証で起動し�
 t4-start
 ```
 
-引数は省略でき、既定は20時間・sshdのみです。VS Code / CursorのRemote SSHで `t4-compute` に接続できます。PCの `~/.config/t4-connection/config` で省略時の動作を変更できます。
+引数は省略でき、既定は20時間・sshdとcode-serverの両方です。VS Code / CursorのRemote SSHで `t4-compute` に接続できます。PCの `~/.config/t4-connection/config` で省略時の動作を変更できます。
 
 ```bash
 T4_START_HOURS=20
-T4_START_SERVICE=sshd  # sshd / code-server / both
+T4_START_SERVICE=both  # sshd / code-server / both
 ```
 
 コマンドラインで指定した引数は、この設定より優先します。時間だけを指定した場合、サービスは設定値を使います。
 
 ```bash
-t4-start 1              # 1時間、サービスは設定値（既定sshd）
+t4-start 1              # 1時間、サービスは設定値（既定both）
 t4-start 1 sshd         # 設定によらずsshdのみ
 t4-start 1 both         # sshdとcode-serverの両方
 t4-start 1 code-server  # code-serverのみ
 t4-start --dry-run      # 起動せず実行内容を確認
 ```
 
-以前のように両方を既定にするには `T4_START_SERVICE=both` を設定してください。設定は起動するPCごとに読みます。
+sshdのみを既定にするには `T4_START_SERVICE=sshd` を設定してください。設定は起動するPCごとに読みます。
 実行時間は1–24時間です。時間制限はスケジューラの `h_rt` で設定し、割当待ち時間は含みません。
-`both` / `code-server` では起動したPCへのSSH転送も自動で開始し、ブラウザ用URLを表示します。PC側のポートは既定8890（`T4_LOCAL_PORT`で変更可能）です。`sshd` のみでは転送しません。
+`both` / `code-server` では起動したPCへのSSH転送も自動で開始し、HTTP応答を確認してから `http://localhost:8890` を既定のブラウザで開きます。自動起動は既定でONです。`--no-open-browser` またはPC側の `T4_OPEN_BROWSER=false` で無効化でき、`--open-browser` で明示的に有効化できます。ブラウザ起動やHTTP確認の失敗ではジョブと転送を終了せず、手動で開くURLを表示します。HTTP確認には `curl` を使います。PC側のポートは既定8890（`T4_LOCAL_PORT`で変更可能）です。`sshd` のみでは転送しません。
 起動用ターミナルは開いたままにし、Ctrl-Cで終了します。片方が終了した場合はもう片方も停止します。
 
 起動したPCでは表示されたURLをそのまま使えます。別PCから接続する場合は:
@@ -175,7 +175,11 @@ start-session
 
 通常終了では子プロセスと状態ファイル・ロックを片付けます。
 強制終了やノード障害ではロックが残ることがあります。`~/.local/state/t4-connection/<service>.lock/owner` にノード・ジョブID・PIDが記録されています。
-`iqstat` / `qstat` と対象ノードのプロセスを確認し、サービスが停止済みの場合だけ、そのサービスの状態ファイルとlockディレクトリを削除して再起動します。
+次回のサービス起動時に既存ロックを検出すると、`iqstat -u <user>` と `qstat -u <user>` を1秒間隔で照会します。
+両方の照会が成功し、現在の割当のジョブIDが一覧に存在し、ロックに記録されたジョブIDがどちらにも存在しない場合だけ、古いロックと接続先を削除して起動を続けます。同時起動との競合を避けるため一時ディレクトリへ移してから削除するので、正常な復旧では退避ファイルは蓄積しません。20時間の制限などで終了処理が走らなかった場合も、この条件を満たせば自動復旧します。`sshd` と `code-server` はそれぞれの起動時に判定します。
+
+記録されたジョブが実行中・待機中の場合、照会失敗・想定外の出力・現在のジョブが一覧に見えない場合、ownerが欠落・破損している場合はロックを保持して停止します。経過時間やSSH接続失敗だけでは回収しません。
+復旧処理の同時実行はlock内の `recovery/` で防ぎます。復旧処理自体が強制終了してこのディレクトリが残った場合は、他の起動・復旧処理が動いていないことを確認してから `recovery/` だけを取り除き、再実行してください。
 
 SSH転送は共有ControlMasterから独立しており、転送失敗やCtrl-Cで既存のSSH masterを終了しません。
 利用者の他のジョブを止める `qdel` や、master全体に対する `ssh -O exit` は実行しません。

@@ -31,6 +31,53 @@ read_state() {
     port "$remote_port"
 }
 isolated=(-S none -o ControlMaster=no -o ControlPersist=no -o ExitOnForwardFailure=yes)
+# Accept only the scheduler's table format, never error text as an empty queue.
+scheduler_job_ids() {
+    local listing
+    listing=$(LC_ALL=C "$1" -u "$(id -un)" 2>&1) || return 1
+    printf '%s\n' "$listing" | awk '
+        NF == 0 { next }
+        $1 == "job-ID" { header=1; next }
+        /^[-[:space:]]+$/ { next }
+        header && $1 ~ /^[0-9]+$/ && NF >= 5 { print $1; next }
+        { bad=1 }
+        END { if (bad) exit 1 }
+    '
+}
+# Recovery is serialized inside the old lock; staging is removed after recovery.
+acquire_service_lock() (
+    if mkdir "$lock" 2>/dev/null; then exit 0; fi
+    # Subshell variables survive until EXIT traps, including on Bash 3.2.
+    recovery=$lock/recovery
+    mkdir "$recovery" 2>/dev/null || fail "Service locked: $lock (recovery busy or inaccessible)."
+    trap 'rmdir "$recovery" 2>/dev/null || :' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+    owner=$(cat "$lock/owner") || fail "Cannot read lock owner: $lock. See README recovery instructions."
+    [[ $owner != *$'\n'* ]] || fail "Invalid lock owner: $lock."
+    read -r old_node old_job old_pid extra <<< "$owner"
+    [[ $old_node =~ ^r[0-9]+n[0-9]+$ && $old_job =~ ^[0-9]+$ && $old_pid =~ ^[0-9]+$ && -z $extra ]] || fail "Invalid lock owner: $lock."
+    [[ $old_job != "$JOB_ID" ]] || fail "Service locked: $lock (current job $old_job)."
+    iq_jobs=$(scheduler_job_ids iqstat) || fail 'iqstat failed or returned unexpected output; retaining lock.'
+    sleep 1
+    jobs=$(scheduler_job_ids qstat) || fail 'qstat failed or returned unexpected output; retaining lock.'
+    jobs=$(printf '%s\n%s\n' "$iq_jobs" "$jobs")
+    if printf '%s\n' "$jobs" | grep -Fxq "$old_job"; then
+        fail "Service locked: $lock (job $old_job still exists on scheduler)."
+    fi
+    printf '%s\n' "$jobs" | grep -Fxq "$JOB_ID" || fail "Current job $JOB_ID is not visible on scheduler; retaining lock."
+    [[ $(cat "$lock/owner") == "$owner" ]] || fail 'Lock owner changed during recovery; retaining lock.'
+    archive=$(mktemp -d "$state_dir/$service.stale.XXXXXXXX")
+    # Move the endpoint before making the lock path available to a new starter.
+    if [[ -e $state_dir/$service ]]; then mv "$state_dir/$service" "$archive/endpoint"; fi
+    mv "$lock" "$archive/lock"
+    recovery=$archive/lock/recovery
+    rm -f "$archive/endpoint" "$archive/lock/owner" "$archive/lock/endpoint"
+    rmdir "$recovery" "$archive/lock" "$archive"
+    printf 'Removed stale %s lock for finished job %s.\n' "$service" "$old_job" >&2
+    mkdir "$lock" 2>/dev/null || fail "Service locked: $lock (another starter acquired it)."
+)
 # Lock each service across nodes; retain a stale lock after an uncatchable kill.
 # Never replace another running service's endpoint.
 serve() {
@@ -44,7 +91,7 @@ serve() {
     local attempt tick ready result log_file=$state_dir/$service.log marker collision
     local command_args=()
     lock=$state_dir/$service.lock
-    mkdir "$lock" 2>/dev/null || fail "Service locked: $lock. See README recovery instructions."
+    acquire_service_lock
     endpoint=$state_dir/$service
     child=
     log_tail=

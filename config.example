@@ -2,8 +2,9 @@
 # This is a Bash file; only source your own configuration.
 T4_LOGIN=tsubame4
 # PC-side defaults for t4-start; explicit command arguments take precedence.
+T4_OPEN_BROWSER=true  # code-server HTTP readiness + automatic browser opening
 T4_START_HOURS=20
-T4_START_SERVICE=sshd  # sshd | code-server | both
+T4_START_SERVICE=both  # sshd | code-server | both
 # Set only on TSUBAME if code-server is not on PATH:
 # T4_CODE_SERVER=/absolute/path/to/code-server
 # Preferred remote ports; try successive ports if occupied.
