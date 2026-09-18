@@ -9,6 +9,7 @@ TSUBAME4の計算ノードへ、VS Code・Cursor・ブラウザ・SSHで接続�
  PC上のVS Code / Cursorから、計算ノードへRemote SSHで接続できる。code-serverやVS Code Remote Tunnelsは不要。
  エディターの画面はPC側、リモートサーバー・ターミナル・プログラムの実行は確保した計算ノード側。ログインノードはSSHの中継だけに使う。
  SSH Targetsの t4-compute を選ぶだけで、その時点の計算ノードへ接続できる。
+ ローカルのAIエージェントも ssh t4-compute 経由で計算ノードへ接続し、ファイルの編集・プログラムの実行・結果の確認ができる。AIエージェントはPC側で動かし、計算処理を確保済みの計算ノードで実行できる。
  ブラウザから使いたい場合は、従来どおりcode-serverも起動できる。
 
 [https://scrapbox.io/files/6aacd589b4cccb6ce7c4109e.png]

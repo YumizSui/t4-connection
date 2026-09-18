@@ -3,6 +3,8 @@
 TSUBAME4の計算ノードで code-server とユーザー権限の sshd を起動し、Mac / Linux / WSL から接続する Bash スクリプト集。
 起動用PCと接続用PCは別でも使えます。各PCで同じTSUBAMEアカウントへのSSH接続を設定してください。
 
+VS Code / CursorのRemote SSHに加え、ローカルで動くAIエージェントも `ssh t4-compute` 経由で計算ノードのファイル編集・プログラム実行・結果確認を行えます。AIエージェントはPC側で動かし、計算処理を確保済みの計算ノードで実行できます。
+
 ## 構成
 
 - `local/`: PC側。ジョブ起動、SSH接続、ブラウザ用転送、リモート配置。
