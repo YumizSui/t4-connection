@@ -11,6 +11,7 @@
 4. PCの `local/deploy` で `lib/`、`remote/`、設定例をTSUBAMEの `~/.local/share/t4-connection/` に配置する。`start-session`・`start-user-sshd`・`start-code-server` の入口も `~/.local/bin/` に作成される。TSUBAME側でもこのディレクトリをPATHに含める。
 5. TSUBAME側の `~/.config/t4-connection/config` に `T4_CODE_SERVER`、`T4_CODE_PORT`、`T4_SSH_PORT` を設定する。code-server本体の導入は別途必要。
 6. 接続する各PCの公開鍵をTSUBAMEの `~/.ssh/authorized_keys` に登録する。code-serverのパスワード設定ファイル `~/.config/code-server/config.yaml` は権限600で管理する。秘密情報をrepoへコピーしない。
+7. VS Code / Cursorを使う場合は、[Remote SSHの実運用設定](remote-editor.md) に従って検索・Git・自動検出の設定範囲を選ぶ。接続先の変更だけではエディタ設定は反映されないため、接続する各PCとRemote設定の優先関係も確認する。
 
 ## 既存環境からの移行
 

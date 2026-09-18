@@ -1,6 +1,6 @@
 ---
 name: t4-connection
-description: TSUBAME4でcode-serverやユーザーsshdを起動し、Mac・Linux・WSLから接続するt4-connectionの導入、既存環境移行、接続トラブルを扱う。一般の計算ジョブ設計には使用しない。
+description: TSUBAME4でcode-serverやユーザーsshdを起動し、Mac・Linux・WSLから接続するt4-connectionの導入、既存環境移行、接続トラブル、Remote SSHでのVS Code・Cursorの実運用設定を扱う。一般の計算ジョブ設計には使用しない。
 ---
 
 # t4-connection
@@ -8,6 +8,8 @@ description: TSUBAME4でcode-serverやユーザーsshdを起動し、Mac・Linux
 実装とREADMEの正本: https://github.com/YumizSui/t4-connection
 
 初回導入・更新・既存環境からの移行を依頼された場合は、[installation.md](references/installation.md) を読む。通常の起動・接続では以下を使う。
+
+VS Code / Cursorの初期設定、複数ディレクトリでの利用、ファイル検索の遅延、拡張ホストのメモリ増加・切断を扱う場合は、[remote-editor.md](references/remote-editor.md) を読む。共通設定とフォルダ固有設定を区別し、対象ウィンドウ・実効設定・ログを確認してから変更する。
 
 ## 作業前の確認
 
