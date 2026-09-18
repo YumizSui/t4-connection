@@ -20,7 +20,8 @@ class Commands(unittest.TestCase):
         self.bin.mkdir()
         self.env = dict(os.environ, HOME=str(self.home), T4_CONFIG=str(self.home/'absent'),
                         PATH=f'{self.bin}:/usr/bin:/bin', LOG=str(self.home/'ssh.log'))
-        self.mock('ssh', '''if [[ $* == *'cat .local/state'* ]]; then
+        self.mock('ssh', '''if [[ $1 == -G ]]; then echo 'user testuser'; exit; fi
+if [[ $* == *'cat .local/state'* ]]; then
 printf '%s\\n' "${TEST_STATE:-r3n11 12345 testuser}"
 else
 printf '%s\\n' "$@" > "$LOG"
@@ -63,6 +64,27 @@ fi''')
         self.assertEqual(self.run_cmd('local/t4-start', '--dry-run', '1', 'both').returncode, 0)
         self.assertFalse((self.home/'ssh.log').exists())
 
+    def test_start_configurable_defaults_and_argument_precedence(self):
+        self.env.pop('T4_START_HOURS', None)
+        self.env.pop('T4_START_SERVICE', None)
+        result = self.run_cmd('local/t4-start', '--dry-run')
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('h_rt=20:00:00', result.stdout)
+        self.assertIn('start-session\\ sshd', result.stdout)
+        config = self.home/'start-config'
+        config.write_text('T4_START_HOURS=3\nT4_START_SERVICE=both\n')
+        self.env['T4_CONFIG'] = str(config)
+        for args, hours, service in [((), 3, 'both'), (('2',), 2, 'both'),
+                                     (('1', 'sshd'), 1, 'sshd')]:
+            result = self.run_cmd('local/t4-start', '--dry-run', *args)
+            self.assertEqual(result.returncode, 0)
+            self.assertIn(f'h_rt={hours}:00:00', result.stdout)
+            self.assertIn('start-session\\ '+service, result.stdout)
+        config.write_text('T4_START_HOURS=25\nT4_START_SERVICE=invalid\n')
+        self.assertNotEqual(self.run_cmd('local/t4-start', '--dry-run').returncode, 0)
+        self.assertEqual(self.run_cmd('local/t4-start', '--dry-run', '1', 'sshd').returncode, 0)
+        self.assertFalse((self.home/'ssh.log').exists())
+
     def test_start_auto_forward_and_failure_keeps_job_alive(self):
         self.mock('ssh', r'''if [[ " $* " == *" -O forward "* ]]; then
     printf '%s\n' "$@" > "$HOME/forward-args"
@@ -95,6 +117,99 @@ exec sleep 30''')
         args=(self.home/'ssh.log').read_text().splitlines()
         self.assertNotIn('-L', args)
         self.assertNotIn('-O', args)
+
+    def test_ssh_config_updates_preserves_settings_and_is_idempotent(self):
+        config = self.home/'.ssh/config'
+        config.parent.mkdir()
+        original = 'Host *\n    ServerAliveInterval 30\nHost tsubame4\n    HostName login.example\n'
+        config.write_text(original)
+        result = self.run_cmd('local/t4-ssh-config')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(config.read_text().endswith(original))
+        self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+        self.env['TEST_STATE'] = 'r4n2 12349 anotheruser'
+        self.assertEqual(self.run_cmd('local/t4-ssh-config').returncode, 0)
+        actual = subprocess.run(['/usr/bin/ssh', '-G', '-F', str(config), 't4-compute'],
+                                text=True, capture_output=True, check=True).stdout
+        for value in ('hostname t4-compute', 'user testuser', 'port 22',
+                      'hostkeyalias t4-compute', 't4-proxy" %r', 'serveraliveinterval 30', 'controlmaster false'):
+            self.assertIn(value, actual)
+        self.assertEqual(config.read_text().count('Host t4-compute'), 1)
+        backups = list(config.parent.glob('config.before-t4.*'))
+        self.assertEqual(self.run_cmd('local/t4-ssh-config').returncode, 0)
+        self.assertEqual(list(config.parent.glob('config.before-t4.*')), backups)
+
+    def test_ssh_config_failures_preserve_existing_file(self):
+        config = self.home/'.ssh/config'
+        config.parent.mkdir()
+        for original in ('Host other t4-compute\n    HostName keep\n',
+                         '# BEGIN t4-connection managed host\nHost *\n',
+                         '# END t4-connection managed host\n'):
+            config.write_text(original)
+            self.assertNotEqual(self.run_cmd('local/t4-ssh-config').returncode, 0)
+            self.assertEqual(config.read_text(), original)
+        config.write_text('Host untouched\n')
+        self.env['T4_LOGIN'] = 't4-compute'
+        self.assertNotEqual(self.run_cmd('local/t4-ssh-config').returncode, 0)
+        self.assertEqual(config.read_text(), 'Host untouched\n')
+
+    def test_start_automatically_updates_ssh_config_and_retains_job_on_failure(self):
+        self.mock('ssh', r'''if [[ $1 == -G ]]; then echo 'user testuser'; exit; fi
+if [[ "$*" == *'cat .local/state'* ]]; then
+    printf '%s\n' 'r3n11 12348 testuser'
+    exit
+fi
+printf '%s\n' "$$" > "$HOME/job-pid"
+echo 'T4_READY sshd r3n11 12348 123'
+exec sleep 30''')
+        config = self.home/'.ssh/config'
+        for service in ('sshd', 'both'):
+            for conflict in (False, True):
+                with self.subTest(service=service, conflict=conflict):
+                    config.parent.mkdir(exist_ok=True)
+                    config.write_text('Host t4-compute\n' if conflict else '')
+                    with tempfile.TemporaryFile(mode='w+') as output:
+                        proc = subprocess.Popen([str(ROOT/'local/t4-start'), '1', service],
+                                                env=self.env, stdout=output, stderr=output)
+                        self.addCleanup(self.stop_process, proc)
+                        for _ in range(100):
+                            output.seek(0)
+                            text = output.read()
+                            if 'Registered Host' in text or 'Automatic SSH config update failed' in text:
+                                break
+                            time.sleep(.05)
+                        self.assertIn('Automatic SSH config update failed' if conflict else 'Registered Host', text)
+                        self.assertIsNone(proc.poll())
+                        if not conflict:
+                            self.assertIn('ProxyCommand', config.read_text())
+                        job_pid = int((self.home/'job-pid').read_text())
+                        self.stop_process(proc)
+                        with self.assertRaises(ProcessLookupError): os.kill(job_pid, 0)
+
+    def test_proxy_resolves_new_endpoint_without_config_update(self):
+        self.assertEqual(self.run_cmd('local/t4-ssh-config').returncode, 0)
+        config = self.home/'.ssh/config'
+        initial = config.read_bytes()
+        for state, endpoint in [('r3n11 22222 testuser', 'r3n11:22222'),
+                                ('r4n11 22225 testuser', 'r4n11:22225')]:
+            self.env['TEST_STATE'] = state
+            result = self.run_cmd('local/t4-proxy', 'testuser')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, '')
+            args = (self.home/'ssh.log').read_text().splitlines()
+            self.assertIn('-W', args)
+            self.assertIn(endpoint, args)
+            self.assertEqual(config.read_bytes(), initial)
+
+    def test_proxy_rejects_invalid_state_and_account_mismatch(self):
+        for state in ['login1 22222 testuser', 'r4n11 99999 testuser',
+                      'r4n11 22222 otheruser', 'r4n11 22222 testuser extra',
+                      'r4n11 22222 testuser\necho bad']:
+            self.env['TEST_STATE'] = state
+            self.assertNotEqual(self.run_cmd('local/t4-proxy', 'testuser').returncode, 0)
+            self.assertFalse((self.home/'ssh.log').exists())
+        self.mock('ssh', 'exit 255')
+        self.assertNotEqual(self.run_cmd('local/t4-proxy', 'testuser').returncode, 0)
 
     def test_login_node_rejected(self):
         self.mock('hostname', 'echo login1')

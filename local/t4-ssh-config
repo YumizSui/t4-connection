@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+source "$(cd "$(dirname "$0")/../lib" && pwd)/common.sh"
+usage() { echo 'Usage: t4-ssh-config'; }
+[[ ${1:-} != --help && ${1:-} != -h ]] || { usage; exit; }
+[[ $# == 0 ]] || { usage >&2; exit 2; }
+[[ $T4_LOGIN != t4-compute ]] || fail 'T4_LOGIN cannot be t4-compute.'
+# The account is stable; the endpoint is resolved by ProxyCommand on every connection.
+remote_user=$(ssh -G "$T4_LOGIN" | awk '$1 == "user" { print $2 }')
+[[ $remote_user =~ ^[a-zA-Z0-9_][a-zA-Z0-9_-]*$ ]] || fail 'Invalid SSH login user.'
+proxy=$(cd "$(dirname "$0")" && pwd)/t4-proxy
+# This path is embedded in an SSH config and then interpreted by the client shell.
+safe_path='^[a-zA-Z0-9_./ -]+$'
+[[ $proxy =~ $safe_path ]] || fail 'Unsupported characters in installation path.'
+umask 077
+mkdir -p "$HOME/.ssh"
+ssh_config=$HOME/.ssh/config
+[[ ! -L $ssh_config ]] || fail 'SSH config is a symlink; update its managed source instead.'
+lock=$HOME/.ssh/t4-connection-config.lock
+mkdir "$lock" 2>/dev/null || fail "SSH config update locked: $lock"
+cleanup_config() { rm -f "$lock/original" "$lock/rest" "$lock/config"; rmdir "$lock"; }
+trap cleanup_config EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+if [[ -e $ssh_config ]]; then cp -p "$ssh_config" "$lock/original"; else : > "$lock/original"; fi
+# Remove only our exact managed block. Reject malformed markers and unmanaged aliases.
+awk '
+    $0 == "# BEGIN t4-connection managed host" { if (inside || seen++) exit 1; inside=1; next }
+    $0 == "# END t4-connection managed host" { if (!inside) exit 1; inside=0; next }
+    inside { next }
+    { line=$0; sub(/#.*/, "", line); gsub(/=/, " ", line); n=split(line, words, /[ \t]+/)
+      host=0; for (i=1; i<=n; i++) { if (words[i]=="") continue
+        if (!host) { if (tolower(words[i])!="host") break; host=1; continue }
+        if (tolower(words[i])=="t4-compute") exit 1
+      }
+      print
+    }
+    END { if (inside) exit 1 }
+' "$lock/original" > "$lock/rest" || fail 'Existing t4-compute entry or malformed managed block; SSH config was not changed.'
+{
+    printf '%s\n' '# BEGIN t4-connection managed host' 'Host t4-compute'
+    printf '    HostName t4-compute\n    User %s\n    Port 22\n' "$remote_user"
+    printf '    ProxyCommand /bin/bash "%s" %%r\n' "$proxy"
+    printf '%s\n' '    HostKeyAlias t4-compute' '    CheckHostIP no'
+    # Do not reuse a master for a previous allocation. Reset scope before user settings.
+    printf '%s\n' '    ControlPath none' '    ControlMaster no' '    ControlPersist no' 'Host *' '# END t4-connection managed host'
+    cat "$lock/rest"
+} > "$lock/config"
+if ! cmp -s "$lock/config" "$lock/original"; then
+    if [[ -e $ssh_config ]]; then
+        cmp -s "$ssh_config" "$lock/original" || fail 'SSH config changed during update; retry.'
+        backup=$(mktemp "$ssh_config.before-t4.XXXXXXXX")
+        cp -p "$ssh_config" "$backup"
+    fi
+    mv "$lock/config" "$ssh_config"
+fi
+printf 'Registered Host t4-compute for %s via %s; the compute node is resolved at connection time.\nSelect t4-compute in VS Code / Cursor Remote SSH.\n' "$remote_user" "$T4_LOGIN"

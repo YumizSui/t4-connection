@@ -33,10 +33,12 @@ description: TSUBAME4でcode-serverやユーザーsshdを起動し、Mac・Linux
 
 ## 起動と接続
 
-- `t4-start --dry-run 1 both` で確認後、指定した時間・サービスで起動する。省略時は20時間・`both`。`both` / `code-server` では起動したPCへの転送も自動で開始する。`sshd` のみでは転送しない。別PCから接続する場合は `t4-forward` を使う。
+- `t4-start --dry-run 1 both` で確認後、指定した時間・サービスで起動する。省略時はPCの `T4_START_HOURS` / `T4_START_SERVICE`（未設定なら20時間・`sshd`）を使い、明示引数を優先する。`both` / `code-server` では起動したPCへの転送も自動で開始する。`sshd` のみでは転送しない。別PCから接続する場合は `t4-forward` を使う。
 - 既存の `iqrsh` / `qrsh` の割当内では `~/.local/share/t4-connection/remote/` の `start-user-sshd`、`start-code-server`、`start-session both` を直接使う。
 - リモートのsshd・code-serverは指定ポートの競合時に次のポートで再試行する。実際に待ち受けを開始したポートが状態ファイルに記録される。PC側の転送ポート（既定8890）は固定で、PC側の競合は `t4-forward <local-port>` で明示的に変更する。
 - `t4-shell` と `t4-forward [local-port]` はTSUBAME側のサービス状態ファイルから接続先を取得する。ホスト名やリモートポートをPCごとに手動同期しない。
+
+- `sshd` / `both` の起動時はPCの `Host t4-compute` を自動更新する。VS Code / CursorのRemote SSHでこのホストを選ぶ。各PCで最新版を導入すれば、ProxyCommandが接続時に状態ファイルを読み、別PCや手動割当で起動したノードにも追従する。既存の接続は移行しないため、割当変更後は再接続する。`t4-ssh-config` は固定の動的接続設定を登録する。更新失敗でもジョブは維持する。
 
 ## 変えてはいけない運用上の条件
 

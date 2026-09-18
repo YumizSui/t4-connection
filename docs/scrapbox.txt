@@ -1,19 +1,28 @@
-TSUBAME4にブラウザ・SSHで接続する t4-connection
-#TSUBAME4 #開発環境
+t4-connection
+#llm #codex #claude #tools #tsubame4
+2026/9/17 作成者 [kfurui.icon]
+GitHubリポジトリ : https://github.com/YumizSui/t4-connection
+
+TSUBAME4の計算ノードへ、VS Code・Cursor・ブラウザ・SSHで接続するためのスクリプト集
 
 [*** 何ができるか]
- 計算ノードでcode-serverとユーザー権限のsshdを起動する。
- 起動したPCとは別のPCからも、同じTSUBAMEアカウントで接続できる。
- ホスト名とポートはTSUBAME側の状態ファイルから取得する。
- TSUBAME側のポートが競合したら次の番号を試す。PC側は基本8890のまま使える。
- [GitHub https://github.com/YumizSui/t4-connection]
+ PC上のVS Code / Cursorから、計算ノードへRemote SSHで接続できる。code-serverやVS Code Remote Tunnelsは不要。
+ エディターの画面はPC側、リモートサーバー・ターミナル・プログラムの実行は確保した計算ノード側。ログインノードはSSHの中継だけに使う。
+ SSH Targetsの t4-compute を選ぶだけで、その時点の計算ノードへ接続できる。
+ ブラウザから使いたい場合は、従来どおりcode-serverも起動できる。
+
+[https://scrapbox.io/files/6aacd589b4cccb6ce7c4109e.png]
+ Cursorで t4-compute に接続した画面。
 
 [*** 初回設定]
  PCにrepoをcloneし、config.exampleを ~/.config/t4-connection/config にコピーする。
  ~/.ssh/config に tsubame4 を設定し、SSHログインできることを確認する。
- local/deployでTSUBAMEにスクリプトを配置し、start-session・start-user-sshd・start-code-serverの入口を作る。TSUBAME側も~/.local/binをPATHに含める。
- TSUBAME側にもconfigを作り、code-serverの実行ファイルとポートを指定する。
+ local/installでPCに導入し、~/.local/binをPATHに追加する。同名の古い関数・aliasがあればバックアップして切り替える。
+ local/installは ~/.ssh/config に Host t4-compute も登録する。各PCで一度ずつ実行する。
+ local/deployでTSUBAMEにスクリプトを配置する。TSUBAME側も~/.local/binをPATHに含める。
  各PCの公開鍵をTSUBAMEの ~/.ssh/authorized_keys に登録する。
+ VS Code / CursorにRemote SSH拡張を導入する。初回のホスト鍵は起動ログのfingerprintと照合する。
+ code-serverを使う場合は、TSUBAME側のconfigに実行ファイルとポートを指定する。
  詳細は [README https://github.com/YumizSui/t4-connection#readme] を参照。
 
 [*** 起動済みの割当がある場合]
@@ -21,41 +30,73 @@ TSUBAME4にブラウザ・SSHで接続する t4-connection
  qrsh -gで確保した通常キューの割当も再利用の候補。サービスが利用可能なら新しく確保しない。
  サービスだけ未起動なら既存割当のターミナルで起動する。再利用できる割当がない場合は、用途に応じてiqrshかqrsh -gを選ぶ。
 
-[*** 起動用PC]
+[*** 起動とRemote SSH接続]
+ PATH設定済みの起動用PCで実行する。repoのディレクトリに移動する必要はない。
 code:bash
- ./local/t4-start 1 both
+ t4-start
 
- 1時間のiqrsh内で両方を起動する。sshd、code-serverの片方だけも指定できる。
- 時間省略時は20時間。code-serverを起動したPCでは転送も自動で始まるので、表示されたURLを開く。
- このターミナルを開いたままにする。終了はCtrl-C。
+ 引数なしの既定は20時間・sshdのみ。起動用ターミナルを開いたままにする。終了はCtrl-C。
+ VS Code / CursorのRemote SSHで t4-compute を選び、作業ディレクトリを開く。
+ 同じTSUBAMEアカウントなら、起動したPCとは別のPCからも接続できる。
 
-[*** 別PCから接続する場合]
+[*** 引数なしの動作を変更する]
+ 起動用PCの ~/.config/t4-connection/config に設定する。
 code:bash
- ./local/t4-shell
+ T4_START_HOURS=20
+ T4_START_SERVICE=sshd
 
- SSHでシェルに入る。初回のホスト鍵は起動ログのfingerprintと照合する。
+ T4_START_SERVICEは sshd / code-server / both から選ぶ。
+ コマンドの引数を指定した項目は、設定ファイルより優先される。
 code:bash
- ./local/t4-forward
+ t4-start 1
+ t4-start 1 both
+ t4-start 1 code-server
+ t4-start --dry-run
 
- 表示されるlocalhostのURLをブラウザで開く。
- code-serverのパスワードはTSUBAMEの ~/.config/code-server/config.yaml で確認する。
- 自動転送に失敗してもジョブは維持される。
- PC側のポートが使用中なら ./local/t4-forward 8892 のように変更する。
+ 上から、1時間・設定済みサービス、1時間・両方、1時間・code-serverのみ、投入せず設定を確認。
+ 設定変更は次回の起動に適用される。既に動いている割当は変更しない。
 
-[*** 手動でiqrshに入る場合]
- 計算ノードで必要なスクリプトを直接実行できる。
+[*** 計算ノードが変わった場合]
+ t4-computeは接続のたびにTSUBAME側のsshd状態ファイルからノード名とポートを取得する。
+ 別PCでt4-startしても、接続側でSSH設定を書き換える必要はない。
+ 既存の接続が途中で別ノードへ移るわけではない。割当を切り替えたらRemote SSHを再接続する。
+ sshdが起動していなければ接続できない。利用可能な割当とサービスを先に確認する。
+
+[*** シェル・ブラウザから接続する]
 code:bash
- start-session both
+ t4-shell
 
- sshdだけならstart-user-sshd、code-serverだけならstart-code-server。
+ SSHで計算ノードのシェルに入る。
+ code-serverを起動する場合は t4-start 1 code-server または t4-start 1 both を使う。起動用PCでは転送も自動で始まる。
+ 別PCからブラウザで接続するときは次を実行する。
+code:bash
+ t4-forward
 
-[*** 既存環境の移行]
+ 表示されるlocalhostのURLを開く。パスワードはTSUBAMEの ~/.config/code-server/config.yaml で確認する。
+ 自動転送に失敗してもジョブは維持される。PC側のポートが使用中なら t4-forward 8892 のように変更する。
+ TSUBAME側のポートが競合したら次の番号を試す。PC側は基本8890のまま使える。
+
+[*** 手動でiqrsh・qrshに入る場合]
+ 確保済みの計算ノードで必要なサービスを直接起動できる。
+code:bash
+ start-session sshd
+
+ 両方なら start-session both、個別の入口は start-user-sshd / start-code-server。
+
+[*** 既存環境の更新・移行]
+ 各PCでrepoを更新してlocal/installを再実行する。t4-computeの登録だけやり直す場合は t4-ssh-config。
  既存の起動ファイルとsymlinkを確認し、入口をバックアップする。
  共有領域のアプリ本体はそのまま使い、専用ディレクトリに新しいスクリプトを置く。
- 既存sshdのホスト鍵はT4_SSHD_DIRで引き継げる。
- 転送用SSHは既存の共有接続と分離される。
+ 既存sshdのホスト鍵はT4_SSHD_DIRで引き継げる。転送用SSHは既存の共有接続と分離される。
 
 [*** 停止と復旧]
  起動用ターミナルでCtrl-Cするとサーバーを終了する。
  強制終了でロックが残った場合は、ownerのジョブIDとPIDが停止済みか確認してから片付ける。
  他のジョブや共有SSH masterを停止しない。
+
+[*** AI用skill]
+ [SKILL https://github.com/YumizSui/t4-connection/tree/main/skills/t4-connection]
+ 起動・接続・既存割当の再利用判断をまとめている。初回導入・更新はreferences/installation.mdを参照。
+
+[*** 更新履歴]
+ 2026/9/18: VS Code / Cursorから計算ノードへRemote SSHで接続できるようにした。接続先は割当の変更に追従し、t4-startの起動時間とサービスは設定ファイルで変更できる。

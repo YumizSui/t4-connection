@@ -10,7 +10,7 @@ if [[ $root != "$destination" ]]; then
     COPYFILE_DISABLE=1 tar "${tar_options[@]}" -C "$root" -cf - local remote lib config.example |
         tar -xf - -C "$destination"
 fi
-for name in t4-start t4-shell t4-forward; do
+for name in t4-start t4-shell t4-forward t4-ssh-config; do
     target=$HOME/.local/bin/$name
     if [[ -e $target || -L $target ]]; then
         backup=$(mktemp "$target.before.XXXXXXXX")
@@ -23,3 +23,5 @@ for name in t4-start t4-shell t4-forward; do
     chmod 755 "$target"
 done
 printf 'Installed in %s\nAdd ~/.local/bin to PATH and remove old shell functions with these names.\n' "$destination"
+
+"$destination/local/t4-ssh-config"

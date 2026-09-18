@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# stdout belongs exclusively to the SSH transport. Diagnostics go to stderr.
+source "$(cd "$(dirname "$0")/../lib" && pwd)/common.sh"
+[[ $# == 1 ]] || fail 'Usage: t4-proxy <ssh-user>'
+expected_user=$1
+[[ $T4_LOGIN != t4-compute ]] || fail 'T4_LOGIN cannot be t4-compute.'
+read_state sshd -o ConnectTimeout=15 -o ConnectionAttempts=1 < /dev/null
+[[ $remote_user == "$expected_user" ]] || fail 'SSH account changed; run t4-ssh-config again.'
+exec ssh -T -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ExitOnForwardFailure=yes \
+    -W "$node:$remote_port" "$T4_LOGIN"

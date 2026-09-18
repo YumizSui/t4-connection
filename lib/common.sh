@@ -22,8 +22,9 @@ compute_node() {
 }
 # State is data, never sourced as shell code. One active instance per service.
 read_state() {
-    local data extra
-    data=$(ssh "$T4_LOGIN" "cat .local/state/t4-connection/$1") || fail "No $1 state; start the service first."
+    local data extra service=$1
+    shift
+    data=$(ssh "$@" "$T4_LOGIN" "cat .local/state/t4-connection/$service") || fail "No $service state; start the service first."
     [[ $data != *$'\n'* ]] || fail 'Invalid multiline state.'
     read -r node remote_port remote_user extra <<< "$data"
     [[ $node =~ ^r[0-9]+n[0-9]+$ && $remote_user =~ ^[a-zA-Z0-9_][a-zA-Z0-9_-]*$ && -z $extra ]] || fail 'Invalid service state.'
